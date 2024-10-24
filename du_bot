@@ -1,0 +1,179 @@
+import aiogram
+import asyncio
+from aiogram import types
+from aiogram import Bot, Dispatcher, F, Router
+from aiogram.filters import Command
+from aiogram.types import Message
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+import datetime
+import random
+bot =Bot(token='7866218967:AAH4lCE9_taLFvJIgictxUNKWIbxyPCOQ9A')
+dp= Dispatcher()
+router= Router()
+@router.message(Command('start'))
+async def send_welcome(message: Message):
+    kb =[
+        [
+            types.KeyboardButton(text='Расчитай мой ИМТ'),
+            types.KeyboardButton(text='Питьевой будильник'),
+            types.KeyboardButton(text='Предсказание'),
+            types.KeyboardButton(text='Подсчет калорий'),
+            types.KeyboardButton(text='Текущее время')
+        ],
+    ]
+    keyboard = types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+    await message.answer("Привет! Я твой персональный бот-помощник. Я могу сказать точное время, вычислить твой ИМТ, подсчитать калорийность съеденного за день, помочь тебе соблюдать водный баланс или принять решение.", reply_markup=keyboard)
+
+class imtState(StatesGroup):
+    weight = State()
+    height = State()
+
+@router.message(F.text.lower().strip() == "расчитай мой имт")
+async def imt(message: Message, state: FSMContext):
+    await message.answer("Введи свой вес в кг:")
+    await state.set_state(imtState.weight)
+
+@router.message(imtState.weight)
+async def get_weight(message: Message, state: FSMContext):
+    try:
+        weight = float(message.text)
+        await state.update_data(weight=weight)
+        await message.answer("Теперь введи свой рост в метрах (например 1.75):")
+        await state.set_state(imtState.height)
+    except ValueError:
+        await message.answer("Пожалуйста, введи вес числом.")
+
+@router.message(imtState.height)
+async def calc_imt(message: Message, state: FSMContext):
+    try:
+        height = float(message.text)
+        data = await state.get_data()
+        weight = data['weight']
+        imt = weight / (height ** 2)
+        if imt < 18.5:
+            ans = 'Недостаточный вес.'
+        elif 18.5 <= imt <= 24.9:
+            ans = 'Нормальный вес.'
+        else:
+            ans = 'Избыточный вес.'
+        await message.answer(f'Твой ИМТ: {imt:.2f}. {ans}')
+        await state.clear()
+    except ValueError:
+        await message.answer("Пожалуйста, введи рост числом.")
+
+class waterState(StatesGroup):
+    set_water = State()
+
+@router.message(F.text.lower().strip() == 'питьевой будильник')
+async def water(message: Message, state: FSMContext):
+    await message.answer('Введите время напоминания в формате "ЧЧ:ММ" ')
+    await state.set_state(waterState.set_water)
+
+@router.message(waterState.set_water)
+async def set_water(message: Message, state: FSMContext):
+    try:
+        water_time = datetime.datetime.strptime(message.text, "%H:%M").time()
+        await state.update_data(water_time=water_time)
+        await message.answer(f"Напоминание установлено на {water_time.strftime('%H:%M')} каждый день!)")
+        asyncio.create_task(schedule_water(message.from_user.id, water_time))
+        await state.clear()
+    except ValueError:
+        await message.answer("Неверный формат времени.")
+
+async def schedule_water(user_id: int, water_time: datetime.time):
+    while True:
+        now = datetime.datetime.now()
+        target_time = datetime.datetime.combine(now.date(), water_time)
+        if now.time() > water_time:
+            target_time += datetime.timedelta(days=1)
+        wait_time = (target_time - now).total_seconds()
+        await asyncio.sleep(wait_time)
+        await bot.send_message(user_id, "Пора выпить стакан воды!")
+
+answers = [
+    "Да",
+    "Нет",
+    "Возможно",
+    "Определенно!",
+    "Скорее всего",
+    "Маловероятно",
+    "Попробуй снова",
+    "Не уверен"
+]
+
+class Quest(StatesGroup):
+    wait_quest = State()
+
+@router.message(F.text == 'Предсказание')
+async def ask_question(message: Message, state: FSMContext):
+    await message.answer("Задайте вопрос, ответом на который может быть да или нет")
+    await state.set_state(Quest.wait_quest)
+
+@router.message(Quest.wait_quest)
+async def answer_question(message: Message, state: FSMContext):
+    user_question = message.text
+    answ = random.choice(answers)
+    await message.answer(f"Ответ:  {answ}")
+    await state.clear()
+
+class CaloriesState(StatesGroup):
+    calories = State()
+    weight = State()
+
+user_cal = {}
+
+async def reset_cal():
+    while True:
+        now = datetime.datetime.now()
+        midnight = datetime.datetime.combine(now.date() + datetime.timedelta(days=1), datetime.time(0, 0))
+        sec = (midnight - now).total_seconds()
+        await asyncio.sleep(sec)
+        user_cal.clear()
+
+async def main():
+    dp.include_router(router)
+    asyncio.create_task(reset_cal())
+    await dp.start_polling(bot)
+
+@router.message(F.text.lower().strip() == 'подсчет калорий')
+async def add_cal(message: Message, state: FSMContext):
+    await message.answer("Введите калорийность блюда (ккал на 100 г):")
+    await state.set_state(CaloriesState.calories)
+@router.message(CaloriesState.calories)
+async def get_cal(message: Message, state: FSMContext):
+    try:
+        calories = float(message.text)
+        await state.update_data(calories=calories)
+        await message.answer("Введите вес блюда (г):")
+        await state.set_state(CaloriesState.weight)
+    except ValueError:
+        await message.answer("Пожалуйста, введите калорийность числом.")
+@router.message(CaloriesState.weight)
+async def get_weight(message: Message, state: FSMContext):
+    try:
+        weight = float(message.text)
+        data = await state.get_data()
+        cal_100g = data['calories']
+        total_cal = (cal_100g * weight) / 100
+        user_id= message.from_user.id
+        if user_id in user_cal:
+            user_cal[user_id] += total_cal
+        else:
+            user_cal[user_id] = total_cal
+
+        await message.answer(
+            f"Вы добавили {total_cal:.2f} ккал. Общий калораж за день: {user_cal[user_id]:.2f} ккал.")
+        await state.clear()
+    except ValueError:
+        await message.answer("Пожалуйста, введите вес числом.")
+
+@router.message(F.text == 'Текущее время')
+async  def ttime(message: Message):
+    current_time = datetime.datetime.now().strftime("%H:%M:%S")
+    await message.answer(f'Текущее время: {current_time}')
+
+
+
+if __name__ == '__main__':
+    asyncio.run(main())
